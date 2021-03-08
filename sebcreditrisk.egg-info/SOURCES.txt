@@ -1,0 +1,6 @@
+README.md
+setup.py
+sebcreditrisk.egg-info/PKG-INFO
+sebcreditrisk.egg-info/SOURCES.txt
+sebcreditrisk.egg-info/dependency_links.txt
+sebcreditrisk.egg-info/top_level.txt
