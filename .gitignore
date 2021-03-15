@@ -1,0 +1,18 @@
+# IDE settings
+.idea
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging 
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IPython Notebook
+.ipynb_checkpoints
+
+# Data directory
+data/
