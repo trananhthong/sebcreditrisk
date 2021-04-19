@@ -10,6 +10,7 @@ setup(
 		'numpy',
 		'scipy',
 		'pandas',
-		'openpyxl'
+		'openpyxl',
+        'torch'
 	],
 	)
