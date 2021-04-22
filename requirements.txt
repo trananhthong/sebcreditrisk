@@ -1,4 +1,5 @@
 backcall==0.2.0
+cycler==0.10.0
 decorator==5.0.7
 et-xmlfile==1.0.1
 ipykernel==5.5.3
@@ -7,20 +8,24 @@ ipython-genutils==0.2.0
 jedi==0.18.0
 jupyter-client==6.1.12
 jupyter-core==4.7.1
+kiwisolver==1.3.1
+matplotlib==3.4.1
 numpy==1.20.2
 openpyxl==3.0.7
 pandas==1.2.4
 parso==0.8.2
 pexpect==4.8.0
 pickleshare==0.7.5
+Pillow==8.2.0
 prompt-toolkit==3.0.18
 ptyprocess==0.7.0
 Pygments==2.8.1
+pyparsing==2.4.7
 python-dateutil==2.8.1
 pytz==2021.1
 pyzmq==22.0.3
 scipy==1.6.2
--e git+https://github.com/trananhthong/sebcreditrisk.git@f99c8ff5130091d3f59c317759f82bf72fdf4d48#egg=sebcreditrisk
+-e git+https://github.com/trananhthong/sebcreditrisk.git@eb1fc1287c45f41cb89101934bfe3163dc466a78#egg=sebcreditrisk
 six==1.15.0
 torch==1.8.1
 tornado==6.1
