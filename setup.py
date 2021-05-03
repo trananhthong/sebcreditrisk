@@ -5,7 +5,7 @@ setup(
 	version='0.0.1',
 	keywords='credit risk',
 	license='MIT',
-	python_requires='>=3.9',
+	python_requires='>=3.7',
 	install_requires=[
 		'numpy',
 		'scipy',
