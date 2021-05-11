@@ -145,11 +145,11 @@ class MertonVasicek(torch.nn.Module):
             z = torch.tensor(z.copy()).reshape(-1, self.z_dim)
 
         # Applying softmax to raw weights
-        w_n = torch.nn.functional.softmax(self.w, dim=1)
+        w_n = torch.sqrt(torch.nn.functional.softmax(self.w, dim=1))
 
         # MV, 10e-10 is added to the pd to make sure the optimization process is more numerically stable
         N = torch.distributions.normal.Normal(0,1)
-        pd = N.cdf((N.icdf(odf_ttc) + (z * w_n)@(torch.sqrt(self.rho) * self.I)) / torch.sqrt(1 - self.rho)) + torch.tensor(10e-10)
+        pd = N.cdf((N.icdf(odf_ttc) + (z * w_n) @ self.I * torch.sqrt(self.rho)) / torch.sqrt(1 - self.rho)) + torch.tensor(10e-10)
 
         return pd
 
@@ -157,7 +157,7 @@ class MertonVasicek(torch.nn.Module):
         return self.rho.detach().numpy()
 
     def get_weight(self):
-        return torch.nn.functional.softmax(self.w, dim=1).detach().numpy()
+        return torch.sqrt(torch.nn.functional.softmax(self.w, dim=1)).detach().numpy()
 
     def get_pd_ttc(self, odf, z):
         '''
@@ -174,10 +174,14 @@ class MertonVasicek(torch.nn.Module):
         if not torch.is_tensor(z):
             z = torch.tensor(z.copy()).reshape(-1, self.z_dim)
 
-        w_n = torch.nn.functional.softmax(self.w, dim=1)
+        w_n = torch.sqrt(torch.nn.functional.softmax(self.w, dim=1))
 
         N = torch.distributions.normal.Normal(0,1)
-        pd_ttc = torch.mean(N.cdf(N.icdf(odf) * torch.sqrt(1 - self.rho) - (z * w_n)@(torch.sqrt(self.rho) * self.I)), axis=0)
+        odf_trend_removed = N.cdf(N.icdf(odf) * torch.sqrt(1 - self.rho) - (z * w_n) @ self.I * torch.sqrt(self.rho))
+        if self.rho_dim ==1:
+            pd_ttc = torch.mean(odf_trend_removed)
+        else:
+            pd_ttc = torch.mean(odf_trend_removed, axis=0)
 
         return pd_ttc.detach().numpy()
 
