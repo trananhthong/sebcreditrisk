@@ -32,7 +32,7 @@ class Tasche(torch.nn.Module):
 
 def qmm(m):
     '''
-    Fucntion for quasi moment matching. The formulation can be found in Tasche, 2013.
+    Fucntion for quasi moment matching. The formulation can be found in the Appendix of Tasche, 2013
 
     Parameters:
     m: ndarray
@@ -47,8 +47,8 @@ def qmm(m):
 
     pdx = get_pdx(m)
     pnx = 1 - pdx
-    pxd = pdx * px / pd
-    pxn = pnx * px / pn
+    pxd = 0 if pd == 0 else pdx * px / pd
+    pxn = 0 if pn == 0 else pnx * px / pn
 
     # Accuracy ratio
     ar = np.sum(pxn[:-1] * np.flip(np.cumsum(np.flip(pxd[1:])))) - np.sum(pxn[1:] * np.cumsum(pxd[:-1]))
@@ -84,7 +84,7 @@ def qmm(m):
         loss_current = loss.item()
         stop = np.abs(loss_prev - loss_current) < 1e-10 * np.abs(loss_prev) or epoch >= 10000
         loss_prev = loss_current
-
+    
     alpha = tasche_smoother.alpha.item()
     beta = tasche_smoother.beta.item()
 
@@ -93,7 +93,7 @@ def qmm(m):
 
 class MertonVasicek(torch.nn.Module):
     '''
-    Simple class for calibrating the rho factor for (multifactor) Merton-Vasicek model
+    Simple class for calibrating the rho factor for multifactor Merton-Vasicek model
 
     Attributes:
     rho_dim: int
@@ -102,10 +102,10 @@ class MertonVasicek(torch.nn.Module):
         Number of indicators, 1 for single factor model
     I: ndarray
         Sign indicator for correlation between PD and Z
-    w: narray
-        Weights for indicators (weights will go through softmax transformation so that they sum to 1)
-    rho: float or arraylike
-        Sensitivity factor
+    w_alpha: Tensor
+        Raw weights for indicators (weights will go through softmax transformation so that they sum to 1)
+    w_rho: Tensor
+        Raw weights for sensitivity factor rho  
     '''
 
     def __init__(self, rho_dim, z_dim, I, rho0):
@@ -124,8 +124,9 @@ class MertonVasicek(torch.nn.Module):
         self.rho_dim = rho_dim
         self.z_dim = z_dim
         self.I = I
-        self.w = torch.nn.Parameter(torch.ones(1, self.z_dim).double())
-        self.rho = torch.nn.Parameter(torch.ones(1, self.rho_dim).double()*rho0)
+        self.w_alpha = torch.nn.Parameter(torch.ones(1, self.z_dim).double())
+        # Parameterize rho as w_rho
+        self.w_rho = torch.nn.Parameter(torch.ones(1, self.rho_dim).double()*(-np.log(1 / rho0 - 1)))
         
     def forward(self, odf_ttc, z):
         '''
@@ -145,19 +146,22 @@ class MertonVasicek(torch.nn.Module):
             z = torch.tensor(z.copy()).reshape(-1, self.z_dim)
 
         # Applying softmax to raw weights
-        w_n = torch.sqrt(torch.nn.functional.softmax(self.w, dim=1))
-
-        # MV, 10e-10 is added to the pd to make sure the optimization process is more numerically stable
+        alpha = torch.sqrt(torch.nn.functional.softmax(self.w_alpha, dim=1))
+        
+        # Getting rho from w_rho
+        rho = 1 / (1 + torch.exp(-self.w_rho))
+        
+        # MV
         N = torch.distributions.normal.Normal(0,1)
-        pd = N.cdf((N.icdf(odf_ttc) + (z * w_n) @ self.I * torch.sqrt(self.rho)) / torch.sqrt(1 - self.rho)) + torch.tensor(10e-10)
+        pd = N.cdf((N.icdf(odf_ttc) + (z * alpha) @ self.I * torch.sqrt(rho)) / torch.sqrt(1 - rho)) + torch.tensor(10e-10)
 
         return pd
 
     def get_rho(self):
-        return self.rho.detach().numpy()
+        return (1 / (1 + torch.exp(-self.w_rho))).detach().numpy()
 
     def get_weight(self):
-        return torch.sqrt(torch.nn.functional.softmax(self.w, dim=1)).detach().numpy()
+        return torch.sqrt(torch.nn.functional.softmax(self.w_alpha, dim=1)).detach().numpy()
 
     def get_pd_ttc(self, odf, z):
         '''
@@ -174,10 +178,12 @@ class MertonVasicek(torch.nn.Module):
         if not torch.is_tensor(z):
             z = torch.tensor(z.copy()).reshape(-1, self.z_dim)
 
-        w_n = torch.sqrt(torch.nn.functional.softmax(self.w, dim=1))
+        alpha = torch.sqrt(torch.nn.functional.softmax(self.w_alpha, dim=1))
+        rho = 1 / (1 + torch.exp(-self.w_rho))
 
         N = torch.distributions.normal.Normal(0,1)
-        odf_trend_removed = N.cdf(N.icdf(odf) * torch.sqrt(1 - self.rho) - (z * w_n) @ self.I * torch.sqrt(self.rho))
+        odf_trend_removed = N.cdf(N.icdf(odf) * torch.sqrt(1 - rho) - (z * alpha) @ self.I * torch.sqrt(rho))
+
         if self.rho_dim ==1:
             pd_ttc = torch.mean(odf_trend_removed)
         else:
@@ -246,7 +252,10 @@ def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.00001, max_ep
     MV.train()
 
     # Training
-    optimizer = torch.optim.Adam([{'params': MV.w, 'lr':0.001}, {'params': MV.rho}], lr=lr)
+    optimizer = torch.optim.Adam([{'params': MV.w_alpha, 'lr':0.001}, {'params': MV.w_rho}], lr=lr)
+    #lr_lambda = lambda x: np.exp(x * np.log(0.1) / max_epochs)
+    #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
     epoch = 0
     stop = False
     loss_prev = 10
@@ -258,47 +267,76 @@ def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.00001, max_ep
         loss = nllloss(pd, odf_h)
         loss.backward()
         optimizer.step()
+        #scheduler.step()
         loss_current = loss.item()
         stop = np.abs(loss_prev - loss_current) < 1e-10 * np.abs(loss_prev) or epoch >= max_epochs
         loss_prev = loss_current
-
+    
     return MV
-
-
-def portfolio_rmse(MV, transitions, z, rating_level_rho=False):
+    
+    
+def predict_pd(MV, transitions_train, z_train, transitions_test=None, z_test=None, rating_level_rho=False):
     '''
-    Calculate RMSE of predicted PD compared to historical ODF
+    Calculate predicted PD and observed PD
 
     Parameters:
     MV: MertonVasicek, required
         Fitted MV model
-    transitions: list, required
+    transitions_train: list, required
         List of observed transition matrices
-    z: ndarray, required
+    z_train: ndarray, required
+    z_test: ndarray. optional
     rating_level_rho: bool, optional
         Set to True for MV model that has separate rho for different ratings
 
     Return:
-    rmse: float, arraylike
-        RMSE of the predicted PD
+    pd_pred_test: float, arraylike
+        predicted PD
+    pd_true_test:
+        observed true PD
     '''
-
+    
     MV.eval()
-
-    px = np.array([get_px(m) for m in transitions])
-    pd_true = np.array([get_pd(m) for m in transitions])
+    
+    if transitions_test is None:
+        transitions_test = transitions_train
+    if z_test is None:
+        z_test = z_train
+    
+    px_train = np.array([get_px(m) for m in transitions_train])
+    pd_true_train = np.array([get_pd(m) for m in transitions_train])
+    
+    px_test = np.array([get_px(m) for m in transitions_test])
+    pd_true_test = np.array([get_pd(m) for m in transitions_test])
 
     if not rating_level_rho:
-        odf = pd_true
+        odf = pd_true_train
     else:
-        odf = np.vstack([qmm(m) for m in transitions])
+        odf = np.vstack([qmm(m + 1e-10) for m in transitions_train])
 
-    pd_ttc = MV.get_pd_ttc(odf, z)    
+    pd_ttc = MV.get_pd_ttc(odf, z_train)    
 
     if not rating_level_rho:
-        pd_pred = MV(pd_ttc, z).detach().numpy()
+        pd_pred_test = MV(pd_ttc, z_test).detach().numpy()
     else:
-        pd_pred = np.sum(MV(pd_ttc, z).detach().numpy() * px, axis=1)
+        pd_pred_test = np.sum(MV(pd_ttc, z_test).detach().numpy() * px_test, axis=1)
+        
+    return pd_pred_test, pd_true_test
+
+
+def rmse(pd_pred, pd_true):
+    '''
+    Calculate RMSE between predicted and true PD
+    
+    Parameters:
+    pd_pred: float, arraylike
+        predicted PD
+    pd_true:
+        observed true PD
+        
+    Return:
+    rmse: float
+    '''
 
     rmse = np.sqrt(np.mean((pd_pred - pd_true) ** 2))
 
