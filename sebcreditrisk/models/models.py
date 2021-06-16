@@ -8,6 +8,7 @@ class Tasche(torch.nn.Module):
     '''
     Class for optimizing parameters (alpha and beta) for quasi moment matching based on Tasche, 2013
     '''
+
     def __init__(self, a_0, b_0):
         super(Tasche, self).__init__()
         self.alpha = torch.nn.Parameter(torch.tensor(a_0))
@@ -41,6 +42,7 @@ def qmm(m):
     Return:
     Smoothed PD vector (arraylike)
     '''
+
     px = get_px(m)
     pd = get_pd(m)
     pn = 1 - pd
@@ -103,7 +105,7 @@ class MertonVasicek(torch.nn.Module):
     I: ndarray
         Sign indicator for correlation between PD and Z
     w_alpha: Tensor
-        Raw weights for indicators (weights will go through softmax transformation so that they sum to 1)
+        Raw weights for indicator
     w_rho: Tensor
         Raw weights for sensitivity factor rho  
     '''
@@ -124,8 +126,9 @@ class MertonVasicek(torch.nn.Module):
         self.rho_dim = rho_dim
         self.z_dim = z_dim
         self.I = I
+
+        # Parameterize alpha as w_alpha and rho as w_rho
         self.w_alpha = torch.nn.Parameter(torch.ones(1, self.z_dim).double())
-        # Parameterize rho as w_rho
         self.w_rho = torch.nn.Parameter(torch.ones(1, self.rho_dim).double()*(-np.log(1 / rho0 - 1)))
         
     def forward(self, odf_ttc, z):
@@ -209,7 +212,7 @@ def nllloss(pd, odf):
     return loss
 
 
-def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.00001, max_epochs=100000):
+def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.01, max_epochs=100000):
     '''Function for fitting MV model
 
     Parameters:
@@ -253,8 +256,6 @@ def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.00001, max_ep
 
     # Training
     optimizer = torch.optim.Adam([{'params': MV.w_alpha, 'lr':0.001}, {'params': MV.w_rho}], lr=lr)
-    #lr_lambda = lambda x: np.exp(x * np.log(0.1) / max_epochs)
-    #scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     epoch = 0
     stop = False
@@ -267,7 +268,6 @@ def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.00001, max_ep
         loss = nllloss(pd, odf_h)
         loss.backward()
         optimizer.step()
-        #scheduler.step()
         loss_current = loss.item()
         stop = np.abs(loss_prev - loss_current) < 1e-10 * np.abs(loss_prev) or epoch >= max_epochs
         loss_prev = loss_current
@@ -275,7 +275,7 @@ def fit_mv(transitions, z, rating_level_rho=False, rho0=0.05, lr=0.00001, max_ep
     return MV
     
     
-def predict_pd(MV, transitions_train, z_train, transitions_test=None, z_test=None, rating_level_rho=False):
+def predict_pd(MV, transitions_train, z_train, transitions_test=None, z_test=None):
     '''
     Calculate predicted PD and observed PD
 
@@ -297,25 +297,30 @@ def predict_pd(MV, transitions_train, z_train, transitions_test=None, z_test=Non
     '''
     
     MV.eval()
+    rating_level_rho = MV.rho_dim > 1
     
     if transitions_test is None:
         transitions_test = transitions_train
     if z_test is None:
         z_test = z_train
     
+    # True PDs
     px_train = np.array([get_px(m) for m in transitions_train])
     pd_true_train = np.array([get_pd(m) for m in transitions_train])
     
     px_test = np.array([get_px(m) for m in transitions_test])
     pd_true_test = np.array([get_pd(m) for m in transitions_test])
 
+    # Observed PD vectors
     if not rating_level_rho:
         odf = pd_true_train
     else:
         odf = np.vstack([qmm(m + 1e-10) for m in transitions_train])
 
+    # Through-the-cycle PD
     pd_ttc = MV.get_pd_ttc(odf, z_train)    
 
+    # PD predictions
     if not rating_level_rho:
         pd_pred_test = MV(pd_ttc, z_test).detach().numpy()
     else:
